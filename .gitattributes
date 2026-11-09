@@ -1,2 +1,2 @@
-# Windows batch files must keep CRLF line endings, also in GitHub "Download ZIP"
-*.bat text eol=crlf
+# Store Windows batch files byte-for-byte (CRLF), so every download keeps working
+*.bat -text
