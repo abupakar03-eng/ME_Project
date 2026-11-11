@@ -59,9 +59,10 @@ try:
         stl.ParagraphFormat.LineSpacingRule = 0
         stl.ParagraphFormat.SpaceAfter = 5
     for _ in range(2):
-        doc.TablesOfContents(1).Update()
-        log("toc updated")
-        doc.Fields.Update()
+        if doc.TablesOfContents.Count:
+            doc.TablesOfContents(1).Update()
+            log("toc updated")
+        doc.Fields.Update()  # PAGEREF page numbers in the contents table and lists
         log("fields updated")
     doc.Save()
     log("saved")

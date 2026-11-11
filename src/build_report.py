@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Build the project report (DOCX) in the chapter format of the reference
 report: Ch.1 Introduction ... Ch.9 Conclusion, Appendix 1 (source code),
 Appendix 2 (screenshots), References.
@@ -167,12 +167,23 @@ def label(text):
                 keep=True, after=2, before=6)
 
 
-def h1(text):
-    return _apply_break(doc.add_heading(text, level=1))
+TOC_ENTRIES = []  # (level, chapter label, title, bookmark) for the table of contents
+
+
+def _toc_mark(p, level, text, num=""):
+    bm = "toc_%d" % (len(TOC_ENTRIES) + 1)
+    bookmark(p, bm)
+    TOC_ENTRIES.append((level, num, text, bm))
+    return p
+
+
+def h1(text, num="", toc=True, toc_text=None):
+    p = _apply_break(doc.add_heading(text, level=1))
+    return _toc_mark(p, 1, toc_text or text, num) if toc else p
 
 
 def h2(text):
-    return doc.add_heading(text, level=2)
+    return _toc_mark(doc.add_heading(text, level=2), 2, text)
 
 
 def h3(text):
@@ -194,10 +205,16 @@ def _apply_break(p):
     return p
 
 
-def chapter(num, title):
-    p = para("CHAPTER %d" % num, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
-             indent=False, after=0, keep=True, before=24)
-    h1(title)
+def chapter(num, title, new_page=True, word="CHAPTER"):
+    """Every chapter / appendix starts on a new page."""
+    if new_page:
+        page_break()
+    para("%s %d" % (word, num), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
+         indent=False, after=0, keep=True)
+    if word == "CHAPTER":
+        h1(title, num=str(num))
+    else:  # contents table: empty chapter-no cell, title "APPENDIX n"
+        h1(title, num="", toc_text="%s %d" % (word, num))
 
 
 FIGS, TABS = [], []
@@ -211,7 +228,11 @@ def bookmark(p, name):
     s.set(qn("w:name"), name)
     e = OxmlElement("w:bookmarkEnd")
     e.set(qn("w:id"), str(_bm[0]))
-    p._p.insert(0, s)
+    ppr = p._p.pPr
+    if ppr is not None:
+        ppr.addnext(s)  # bookmarkStart must come after <w:pPr>
+    else:
+        p._p.insert(0, s)
     p._p.append(e)
 
 
@@ -236,12 +257,7 @@ def figure(path, num, caption, width=6.0, max_h=4.3):
 
 
 def table(header, rows, num=None, caption=None, widths=None, size=14):
-    if caption:
-        c = para("Table %s %s" % (num, caption), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
-                 indent=False, size=14, after=4, keep=True, before=6)
-        bm = "tab_%s" % num.replace(".", "_")
-        bookmark(c, bm)
-        TABS.append((num, caption, bm))
+    """Table with its caption BELOW it ("Table 5.1 ..."), kept on the same page."""
     t = doc.add_table(rows=1, cols=len(header))
     t.style = "Table Grid"
     t.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -272,7 +288,9 @@ def table(header, rows, num=None, caption=None, widths=None, size=14):
         if ri == 0:
             th = OxmlElement("w:tblHeader")
             trPr.append(th)
-        if ri < len(t.rows) - 1 and len(t.rows) <= 12:  # keep small tables together
+        last = ri == len(t.rows) - 1
+        # keep small tables together; the last row also stays with the caption below
+        if (len(t.rows) <= 12 and not last) or (last and caption):
             for cell in row.cells:
                 for p in cell.paragraphs:
                     p.paragraph_format.keep_with_next = True
@@ -280,7 +298,14 @@ def table(header, rows, num=None, caption=None, widths=None, size=14):
         for row in t.rows:
             for cell, w in zip(row.cells, widths):
                 cell.width = Inches(w)
-    para("", after=4)
+    if caption:
+        c = para("Table %s %s" % (num, caption), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
+                 indent=False, size=14, after=12, before=6)
+        bm = "tab_%s" % num.replace(".", "_")
+        bookmark(c, bm)
+        TABS.append((num, caption, bm))
+    else:
+        para("", after=4)
     return t
 
 
@@ -367,8 +392,6 @@ def code_block(path, title):
 # The report starts directly with the Abstract.
 footer_page_number(doc.sections[0], "lowerRoman", 1)
 
-para(TITLE, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, indent=False, size=16, after=18,
-     spacing=WD_LINE_SPACING.SINGLE)
 h1("ABSTRACT")
 para("Plant diseases reduce crop yield, and early recognition depends on scarce experts. "
      "This project develops a lightweight, explainable deep learning system that identifies "
@@ -397,17 +420,106 @@ para("On the held-out test set of %s images the model achieved an accuracy of **
 para("**Keywords:** Plant disease detection, deep learning, MobileNetV3-Small, transfer "
      "learning, limited data, Grad-CAM, explainable AI, Flask.", indent=False)
 
-page_break()
-h1("TABLE OF CONTENTS")
-p = doc.add_paragraph()
-field(p, 'TOC \\o "1-2" \\h \\z \\u')
+# ---------------------------------------------- Tamil abstract
+TAMIL_FONT = "Latha"  # Tamil font shipped with Windows (Times New Roman has no Tamil glyphs)
 
+
+def tamil_runs(p, size=10.5, latin=13):
+    """Tamil letters use Latha (complex-script font) at `size` pt, while English words
+    and numbers inside the same text stay Times New Roman at `latin` pt."""
+    import copy as _copy
+    import re as _re
+    for r in list(p.runs):
+        text = r.text
+        # split into Tamil and non-Tamil pieces; spaces/punctuation stay with Tamil
+        pieces = [s for s in _re.split(r"([A-Za-z0-9][A-Za-z0-9.,%×()\-–/]*(?:\s+[A-Za-z0-9][A-Za-z0-9.,%×()\-–/]*)*)", text) if s]
+        for piece in pieces:
+            is_latin = bool(_re.match(r"[A-Za-z0-9]", piece))
+            nr = _copy.deepcopy(r._r)
+            for t in nr.findall(qn("w:t")):
+                nr.remove(t)
+            t = OxmlElement("w:t")
+            t.set(qn("xml:space"), "preserve")
+            t.text = piece
+            nr.append(t)
+            rPr = nr.find(qn("w:rPr"))
+            if rPr is None:
+                rPr = OxmlElement("w:rPr")
+                nr.insert(0, rPr)
+            for old in rPr.findall(qn("w:rFonts")):
+                rPr.remove(old)
+            rf = OxmlElement("w:rFonts")
+            fnt = FONT if is_latin else TAMIL_FONT
+            for att in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+                rf.set(qn(att), fnt)
+            rPr.insert(0, rf)
+            for tag in ("w:sz", "w:szCs"):
+                for old in rPr.findall(qn(tag)):
+                    rPr.remove(old)
+                el = OxmlElement(tag)
+                el.set(qn("w:val"), str(int((latin if is_latin else size) * 2)))
+                rPr.append(el)
+            b = rPr.find(qn("w:b"))
+            if b is not None:
+                b.addnext(OxmlElement("w:bCs"))  # schema order: b, bCs
+            r._r.addprevious(nr)
+        r._r.getparent().remove(r._r)
+    return p
+
+
+page_break()
+tamil_runs(h1("ஆய்வுச் சுருக்கம்"), 13)
+for txt in [
+    "தாவர நோய்கள் பயிர் விளைச்சலைக் குறைக்கின்றன. அவற்றை ஆரம்ப நிலையிலேயே கண்டறிய "
+    "வல்லுநர்களின் உதவி தேவைப்படுகிறது; ஆனால் அவர்கள் எல்லா இடங்களிலும் எளிதில் "
+    "கிடைப்பதில்லை. இந்தத் திட்டம், ஓர் இலையின் புகைப்படத்திலிருந்து தாவர இலை நோய்களைக் "
+    "கண்டறியும், எடை குறைந்த மற்றும் தன் முடிவுகளை விளக்கக்கூடிய ஆழ்கற்றல் (Deep "
+    "Learning) அமைப்பை உருவாக்குகிறது.",
+    "PlantVillage வண்ணத் தரவுத்தொகுப்பு (%s படங்கள், 14 பயிர்களை உள்ளடக்கிய 38 "
+    "பயிர்–நோய் வகுப்புகள்) படிக்க இயலாத கோப்புகள் மற்றும் ஒரே மாதிரியான நகல்களுக்காகச் "
+    "சரிபார்க்கப்பட்டு, இலைக் குழுவைக் கருத்தில் கொண்ட பிரிப்பு முறையில் பயிற்சி (%s), "
+    "சரிபார்ப்பு (%s), சோதனை (%s) எனப் பிரிக்கப்பட்டது. 20%%, 40%%, 60%%, 80%%, 100%% "
+    "என்ற கட்டுப்படுத்தப்பட்ட பயிற்சித் தரவு அளவுகள் பயிற்சிப் பகுதியிலிருந்து மட்டுமே "
+    "எடுக்கப்பட்டன. ImageNet-இல் முன்பயிற்சி பெற்ற MobileNetV3-Small வலையமைப்பு, 40%% "
+    "தரவு அளவில் (%s படங்கள்) 160 × 160 பிக்சல் அளவில் நுண்சீரமைப்பு (fine-tuning) "
+    "செய்யப்பட்டது. வகுப்புச் சமநிலையின்மையைச் சமாளிக்க, லேபிளை மாற்றாத தரவுப் பெருக்கமும் "
+    "(augmentation) வகுப்பு எடையிடப்பட்ட cross-entropy இழப்புச் சார்பும் "
+    "பயன்படுத்தப்பட்டன."
+    % ("{:,}".format(DS["total_images"]), "{:,}".format(DS["train"]),
+       "{:,}".format(DS["validation"]), "{:,}".format(DS["test"]),
+       "{:,}".format(MET["train_images"])),
+    "%s படங்கள் கொண்ட தனியான சோதனைத் தொகுப்பில் இம்மாதிரி **%s** துல்லியம் (accuracy), "
+    "%s macro precision, %s macro recall, **%s** macro F1-மதிப்பெண் ஆகியவற்றை அடைந்தது. "
+    "இதில் %.2f மில்லியன் அளவுருக்கள் மட்டுமே உள்ளன; மாதிரிக் கோப்பின் அளவு %.1f MB; "
+    "ஒரு படத்திற்குச் சராசரியாக %.0f மில்லி விநாடிகளில் CPU-வில் கணிப்பு செய்கிறது. "
+    "ஒவ்வொரு கணிப்பையும் Grad-CAM வெப்ப வரைபடங்கள் விளக்குகின்றன. படங்களைக் "
+    "கிடைமட்டமாகப் புரட்டியபோது %s நேரங்களில் கணிப்பு மாறவில்லை; வெப்ப வரைபடங்களின் "
+    "சராசரித் தொடர்பு %.3f ஆக இருந்தது. இம்மாதிரி உள்நுழைவு, படப் பதிவேற்றம், Grad-CAM "
+    "காட்சி, அறிக்கைகள், வரலாறு ஆகிய வசதிகளுடன் கூடிய Flask இணையப் பயன்பாட்டில் "
+    "செயல்படுத்தப்பட்டுள்ளது."
+    % ("{:,}".format(EV["test_images"]), pct(EV["accuracy"]), pct(EV["macro_precision"]),
+       pct(EV["macro_recall"]), pct(EV["macro_f1"]), EV["parameters"] / 1e6,
+       MET["checkpoint_mb"], EV["latency_ms_cpu"],
+       pct(STAB["views"]["horizontal_flip"]["prediction_agreement"], 1),
+       STAB["views"]["horizontal_flip"]["mean_pearson"])]:
+    # Latha already has tall line height, so single spacing reads like 1.5 and fits one page
+    tamil_runs(para(txt)).paragraph_format.line_spacing = 1.0
+tamil_runs(para("**முக்கியச் சொற்கள்:** தாவர நோய் கண்டறிதல், ஆழ்கற்றல், MobileNetV3-Small, "
+                "இடமாற்றக் கற்றல் (Transfer Learning), குறைந்த தரவு, Grad-CAM, விளக்கக்கூடிய "
+                "செயற்கை நுண்ணறிவு, Flask.", indent=False)).paragraph_format.line_spacing = 1.0
+
+page_break()
+TOC_HEAD = h1("TABLE OF CONTENTS", toc=False)
+
+page_break()
 LOF_ANCHOR = h1("LIST OF FIGURES")
 LOF_PARA = doc.add_paragraph()
+page_break()
 LOT_ANCHOR = h1("LIST OF TABLES")
 LOT_PARA = doc.add_paragraph()
+page_break()
 h1("LIST OF ABBREVIATIONS")
-table(["Abbreviation", "Expansion"], [
+for ab, ex in [
     ("AI", "Artificial Intelligence"), ("CNN", "Convolutional Neural Network"),
     ("CPU", "Central Processing Unit"), ("CSS", "Cascading Style Sheets"),
     ("DFD", "Data Flow Diagram"), ("F1", "Harmonic mean of precision and recall"),
@@ -417,15 +529,22 @@ table(["Abbreviation", "Expansion"], [
     ("ML", "Machine Learning"), ("ReLU", "Rectified Linear Unit"),
     ("SQL", "Structured Query Language"), ("SVM", "Support Vector Machine"),
     ("UML", "Unified Modeling Language"), ("XAI", "Explainable Artificial Intelligence"),
-], widths=[1.6, 4.0])
+]:  # plain aligned lines, no table: "AI    –    Artificial Intelligence"
+    p = doc.add_paragraph()
+    p.paragraph_format.left_indent = Inches(2.3)
+    p.paragraph_format.first_line_indent = Inches(-2.0)  # abbreviation starts at 0.3"
+    p.paragraph_format.tab_stops.add_tab_stop(Inches(1.9))
+    p.paragraph_format.tab_stops.add_tab_stop(Inches(2.3))
+    p.paragraph_format.space_after = Pt(0)
+    p.add_run(ab).bold = True
+    p.add_run("\t–\t" + ex)
 
 # ---------------------------------------------- MAIN BODY (arabic)
 s3 = new_section()
 footer_page_number(s3, "decimal", 1)
 
 # ============================== CHAPTER 1
-p = para("CHAPTER 1", bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, indent=False, after=0, keep=True)
-h1("INTRODUCTION")
+chapter(1, "INTRODUCTION", new_page=False)  # the new section already starts a page
 para("Agriculture supports the livelihood of a large part of the population, and plant "
      "diseases are one of the main causes of loss in crop yield and quality. Fungal, bacterial "
      "and viral infections usually appear first on the leaves as spots, lesions, mildew, "
@@ -690,7 +809,7 @@ para("A use case diagram shows the interactions between actors and the system. T
      "uploads a leaf image, views the prediction, confidence and Grad-CAM heatmap, prints the "
      "report, reviews the history and logs out. The trained model acts as a secondary actor "
      "that supplies the prediction and explanation.")
-figure(os.path.join(FIG, "design", "fig_5_2_use_case.png"), "5.2", "Use Case Diagram", 5.6)
+figure(os.path.join(FIG, "design", "fig_5_2_use_case.png"), "5.2.1", "Use Case Diagram", 5.6)
 h3("5.2.2 Class Diagram")
 para("A class diagram is a static structure diagram that describes the classes of a system, "
      "their attributes, operations and relationships.")
@@ -704,28 +823,41 @@ bullets([
     "history.",
     "**Database:** the users and predictions tables in SQLite.",
 ])
-figure(os.path.join(FIG, "design", "fig_5_3_class.png"), "5.3", "Class Diagram", 6.2)
+figure(os.path.join(FIG, "design", "fig_5_3_class.png"), "5.2.2", "Class Diagram", 6.2)
 h3("5.2.3 Sequence Diagram")
 para("A sequence diagram shows object interactions arranged in time order. The user logs in "
      "through the browser, the Flask server verifies the hashed password from the database, "
      "the uploaded image is validated and resized, the model and Grad-CAM produce the "
      "probabilities and heatmap, the prediction is inserted into the database and the result "
      "page is returned to the user.")
-figure(os.path.join(FIG, "design", "fig_5_4_sequence.png"), "5.4", "Sequence Diagram", 6.2)
+figure(os.path.join(FIG, "design", "fig_5_4_sequence.png"), "5.2.3", "Sequence Diagram", 6.2)
 h3("5.2.4 Activity Diagram")
 para("An activity diagram represents the flow of control from one activity to another. "
      "Invalid uploads (unsupported type, unreadable or very small images) return the user to "
      "the upload step with an error message; valid images continue through preprocessing, "
      "prediction, explanation and storage.")
-figure(os.path.join(FIG, "design", "fig_5_5_activity.png"), "5.5", "Activity Diagram", 4.4)
+figure(os.path.join(FIG, "design", "fig_5_5_activity.png"), "5.2.4", "Activity Diagram", 4.4)
 h2("5.3 DATA FLOW DIAGRAM")
 para("A data flow diagram shows how data is processed and transferred in a system. It "
      "identifies the external entities, processes and data stores, and how the inputs are "
      "transformed into outputs. Level 0 shows the whole system as a single process; Level 1 "
      "divides it into its main processes; Level 2 expands the prediction process.")
-figure(os.path.join(FIG, "design", "fig_5_6_dfd0.png"), "5.6", "Level 0 Data Flow Diagram", 5.6)
-figure(os.path.join(FIG, "design", "fig_5_7_dfd1.png"), "5.7", "Level 1 Data Flow Diagram", 6.2)
-figure(os.path.join(FIG, "design", "fig_5_8_dfd2.png"), "5.8",
+h3("5.3.1 Level 0 Data Flow Diagram")
+para("The Level 0 diagram (context diagram) shows the whole system as a single process. The "
+     "user supplies the leaf image and login credentials and receives the disease, confidence, "
+     "Grad-CAM heatmap and report.")
+figure(os.path.join(FIG, "design", "fig_5_6_dfd0.png"), "5.3.1", "Level 0 Data Flow Diagram", 5.6)
+h3("5.3.2 Level 1 Data Flow Diagram")
+para("The Level 1 diagram divides the system into four processes: authenticate, upload and "
+     "validate, predict and explain, and report and history. They use three data stores: users "
+     "(D1), the model bundle (D2) and predictions (D3).")
+figure(os.path.join(FIG, "design", "fig_5_7_dfd1.png"), "5.3.2", "Level 1 Data Flow Diagram", 6.2)
+h3("5.3.3 Level 2 Data Flow Diagram")
+para("The Level 2 diagram expands process 3.0 (predict and explain): the image is resized, "
+     "cropped and normalised, passed forward through the CNN using the stored model weights, "
+     "converted to top-5 labels by softmax and explained by Grad-CAM, and the labels and "
+     "heatmap are then stored and displayed.")
+figure(os.path.join(FIG, "design", "fig_5_8_dfd2.png"), "5.3.3",
        "Level 2 Data Flow Diagram (Prediction process)", 6.2)
 h2("5.4 DATABASE DESIGN")
 para("The application uses an SQLite database with two tables. Passwords are never stored in "
@@ -830,7 +962,7 @@ budget_rows = [(b["id"], "%d%%" % int(100 * b["fraction"]), "{:,}".format(b["ima
                for b in DS["budgets"]]
 table(["Budget", "Fraction", "Training images", "Validation", "Test"], budget_rows,
       "7.1", "Controlled training budgets", widths=[1.0, 1.0, 1.6, 1.2, 1.0])
-figure(os.path.join(FIG, "fig_class_distribution.png"), "7.1",
+figure(os.path.join(FIG, "fig_class_distribution.png"), "7.2.1",
        "Class distribution of the PlantVillage dataset", 6.0)
 h3("7.2.2 Preprocessing and Augmentation Module")
 para("All images are converted to RGB. For evaluation and inference, each image is resized "
@@ -922,7 +1054,10 @@ para("Acceptance testing determines whether the system satisfies the user requir
      "application was checked against the objectives in Section 1.5: correct predictions on "
      "unseen test images, a visible explanation for every prediction, clear error messages "
      "and private per-user history.")
-figure(os.path.join(FIG, "design", "fig_8_1_testing_flow.png"), "8.1", "Flow of testing", 5.8)
+h3("8.1.5 Flow of Testing")
+para("The testing activities were carried out in the order shown below, from unit testing of "
+     "individual functions to acceptance testing of the complete application.")
+figure(os.path.join(FIG, "design", "fig_8_1_testing_flow.png"), "8.1.5", "Flow of testing", 5.8)
 h2("8.2 TEST CASES")
 tc_rows = [(r["test_id"], r["test_case"], r["detail"], r["status"]) for r in TCS]
 tc_rows += [
@@ -942,14 +1077,14 @@ table(["ID", "Test case", "Observed result", "Status"], tc_rows, "8.1",
 h2("8.3 RESULTS AND DISCUSSION")
 h3("8.3.1 Training Behaviour")
 last = LOG[-1]
-para("Figure 8.2 shows the training and validation curves. Training loss fell from %.3f to "
+para("Figure 8.3.1 shows the training and validation curves. Training loss fell from %.3f to "
      "%.3f and validation accuracy rose from %s to %s over %d epochs. The validation loss "
      "remained below or close to the training loss throughout, indicating that the "
      "augmentation and weight decay prevented overfitting. The best checkpoint (epoch %d) "
      "had a validation macro F1-score of %s."
      % (float(LOG[0]["train_loss"]), float(last["train_loss"]), pct(float(LOG[0]["val_acc"])),
         pct(float(last["val_acc"])), len(LOG), MET["best_epoch"], pct(MET["val_macro_f1"])))
-figure(os.path.join(FIG, "results", "fig_8_2_training_curves.png"), "8.2",
+figure(os.path.join(FIG, "results", "fig_8_2_training_curves.png"), "8.3.1",
        "Training and validation curves", 6.2)
 h3("8.3.2 Classification Performance")
 table(["Metric", "Value"], [
@@ -963,29 +1098,30 @@ table(["Metric", "Value"], [
 low = sorted(EV["per_class"].items(), key=lambda kv: kv[1]["f1"])[:4]
 para("The model correctly classified %s of the %s held-out test images. Because macro "
      "F1-score (%s) is close to accuracy, performance is balanced across classes rather than "
-     "driven by the large classes. Figure 8.3 shows the F1-score of every class: %d of the "
+     "driven by the large classes. Figure 8.3.2 shows the F1-score of every class: %d of the "
      "38 classes exceed 95%%. The weakest classes are %s."
      % (pct(EV["accuracy"]), "{:,}".format(EV["test_images"]), pct(EV["macro_f1"]),
         sum(1 for v in EV["per_class"].values() if v["f1"] >= 0.95),
         ", ".join("%s (%s)" % (nice(k), pct(v["f1"], 1)) for k, v in low)))
-figure(os.path.join(FIG, "results", "fig_8_3_per_class_f1.png"), "8.3",
+figure(os.path.join(FIG, "results", "fig_8_3_per_class_f1.png"), "8.3.2",
        "Per-class F1-score on the test set", 5.2)
 cm, cl = EV["confusion_matrix"], EV["classes"]
 pairs = sorted(((cm[i][j], cl[i], cl[j]) for i in range(38) for j in range(38) if i != j),
                reverse=True)[:3]
-para("The confusion matrix in Figure 8.4 is strongly diagonal. The most frequent errors are "
+h3("8.3.3 Confusion Matrix")
+para("The confusion matrix in Figure 8.3.3 is strongly diagonal. The most frequent errors are "
      "between visually similar diseases of the same crop: %s. These diseases produce brown "
      "necrotic lesions that are difficult to separate even for human observers, and the "
      "errors suggest where additional training images would help most."
      % "; ".join("%s predicted as %s (%d images)" % (nice(a), nice(b), n) for n, a, b in pairs))
-figure(os.path.join(FIG, "results", "fig_8_4_confusion_matrix.png"), "8.4",
+figure(os.path.join(FIG, "results", "fig_8_4_confusion_matrix.png"), "8.3.3",
        "Confusion matrix (row-normalised)", 6.0)
-h3("8.3.3 Explanation Quality and Stability")
-para("Figure 8.5 shows Grad-CAM explanations for test images of six classes. For diseased "
+h3("8.3.4 Explanation Quality and Stability")
+para("Figure 8.3.4 shows Grad-CAM explanations for test images of six classes. For diseased "
      "leaves, the highest activations lie on the lesions, rust pustules and blighted tissue; "
      "for the healthy leaf the activation spreads over the leaf blade. Table 8.3 reports the "
      "measured stability of these explanations.")
-figure(os.path.join(FIG, "results", "fig_8_5_gradcam_samples.png"), "8.5",
+figure(os.path.join(FIG, "results", "fig_8_5_gradcam_samples.png"), "8.3.4",
        "Grad-CAM explanations for test images", 6.2)
 vn = {"horizontal_flip": "Horizontal flip", "brightness_+15%": "Brightness +15%",
       "rotation_10deg": "Rotation 10°"}
@@ -1003,7 +1139,7 @@ para("The explanations are highly stable under brightness change (r = %.3f) and 
      % (br["mean_pearson"], fl["mean_pearson"], pct(br["prediction_agreement"], 1),
         pct(fl["prediction_agreement"], 1), pct(ro["prediction_agreement"], 1),
         ro["mean_pearson"]))
-h3("8.3.4 Comparison with Published Work")
+h3("8.3.5 Comparison with Published Work")
 para("Table 8.4 places the result beside published PlantVillage studies. The published "
      "values were reported by their authors under their own data splits, so the comparison "
      "is indicative only. The proposed model uses far fewer parameters and only 40% of the "
@@ -1050,9 +1186,7 @@ bullets([
 ])
 
 # ============================== APPENDIX 1
-p = para("APPENDIX 1", bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, indent=False, after=0,
-         keep=True, before=24)
-h1("SOURCE CODE")
+chapter(1, "SOURCE CODE", word="APPENDIX")
 code_block("app.py", "A1.1 APP.PY (Flask web application)")
 code_block("src/predict.py", "A1.2 PREDICT.PY (model bundle loader)")
 code_block("src/gradcam.py", "A1.3 GRADCAM.PY (explanation module)")
@@ -1060,9 +1194,7 @@ code_block("src/train.py", "A1.4 TRAIN.PY (training pipeline)")
 code_block("templates/result.html", "A1.5 RESULT.HTML (result page template)")
 
 # ============================== APPENDIX 2
-p = para("APPENDIX 2", bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, indent=False, after=0,
-         keep=True, before=24)
-h1("SCREENSHOTS")
+chapter(2, "SCREENSHOTS", word="APPENDIX")
 for i, (f, cap) in enumerate([
         ("01_login.png", "Login page"), ("02_register.png", "Registration page"),
         ("08_login_error.png", "Login with invalid credentials"),
@@ -1074,6 +1206,7 @@ for i, (f, cap) in enumerate([
     figure(os.path.join(SHOT, f), "A2.%d" % i, cap, 6.0)
 
 # ============================== REFERENCES
+page_break()
 h1("REFERENCES")
 REFS = [
     "Hughes, D. P. and Salathé, M. (2015), ‘An open access repository of images on plant "
@@ -1123,24 +1256,92 @@ for i, r in enumerate(REFS, 1):
 
 
 # ------------------------------------------- list of figures / tables
-def fill_list(anchor_para, items, prefix):
-    host = anchor_para
+def fill_list(anchor_para, items, first_col):
+    """List of figures / tables as a 3-column table: number | title | page."""
+    t = doc.add_table(rows=1, cols=3)
+    t.style = "Table Grid"
+    t.alignment = WD_TABLE_ALIGNMENT.CENTER
+    widths = [1.25, 4.05, 0.95]
+    CEN = WD_ALIGN_PARAGRAPH.CENTER
+    for cell, txt in zip(t.rows[0].cells, (first_col, "TITLE", "PAGE NO")):
+        cell.text = ""
+        cell.paragraphs[0].add_run(txt).bold = True
+        cell.paragraphs[0].alignment = CEN
+        shade(cell, "D9E7D6")
+    t.rows[0]._tr.get_or_add_trPr().append(OxmlElement("w:tblHeader"))
     for num, cap, bm in items:
-        p = OxmlElement("w:p")
-        host._p.addnext(p)
-        from docx.text.paragraph import Paragraph
-        para_obj = Paragraph(p, host._parent)
-        para_obj.paragraph_format.tab_stops.add_tab_stop(Inches(5.7), alignment=2, leader=1)
-        para_obj.paragraph_format.space_after = Pt(2)
-        para_obj.paragraph_format.left_indent = Inches(1.2)
-        para_obj.paragraph_format.first_line_indent = Inches(-1.2)
-        para_obj.add_run("%s %s\t%s\t" % (prefix, num, cap))
-        field(para_obj, "PAGEREF %s \\h" % bm)
-        host = para_obj
+        cells = t.add_row().cells
+        for c in cells:
+            c.text = ""
+        cells[0].paragraphs[0].add_run(num)
+        cells[0].paragraphs[0].alignment = CEN
+        cells[1].paragraphs[0].add_run(cap)
+        cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+        cells[2].paragraphs[0].alignment = CEN
+        field(cells[2].paragraphs[0], "PAGEREF %s \\h" % bm)
+    for row in t.rows:
+        row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+        for cell, w in zip(row.cells, widths):
+            cell.width = Inches(w)
+            for p in cell.paragraphs:
+                p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+                p.paragraph_format.space_before = Pt(2)
+                p.paragraph_format.space_after = Pt(2)
+                p.paragraph_format.first_line_indent = Inches(0)
+    anchor_para._p.addnext(t._tbl)
+    anchor_para._p.getparent().remove(anchor_para._p)  # drop the empty placeholder line
 
 
-fill_list(LOF_PARA, FIGS, "Fig.No")
-fill_list(LOT_PARA, TABS, "Table")
+fill_list(LOF_PARA, FIGS, "FIG NO")
+fill_list(LOT_PARA, TABS, "TABLE NO")
+
+
+# ------------------------------------------- table of contents (3 columns)
+def build_toc_table():
+    t = doc.add_table(rows=1, cols=3)
+    t.style = "Table Grid"
+    t.alignment = WD_TABLE_ALIGNMENT.CENTER
+    widths = [1.25, 4.05, 0.95]
+    CEN, LEFT = WD_ALIGN_PARAGRAPH.CENTER, WD_ALIGN_PARAGRAPH.LEFT
+    for cell, txt in zip(t.rows[0].cells, ("CHAPTER NO", "TITLE", "PAGE NO")):
+        cell.text = ""
+        cell.paragraphs[0].add_run(txt).bold = True
+        cell.paragraphs[0].alignment = CEN
+        shade(cell, "D9E7D6")
+    trPr = t.rows[0]._tr.get_or_add_trPr()
+    trPr.append(OxmlElement("w:tblHeader"))  # repeat the header on every TOC page
+    for level, num, text, bm in TOC_ENTRIES:
+        cells = t.add_row().cells
+        for c in cells:
+            c.text = ""
+        cells[0].paragraphs[0].alignment = CEN
+        cells[2].paragraphs[0].alignment = CEN
+        r = cells[0].paragraphs[0].add_run(num)
+        r.bold = True
+        tp = cells[1].paragraphs[0]
+        tp.alignment = LEFT
+        if level == 2:
+            tp.paragraph_format.left_indent = Inches(0.3)
+        tp.add_run(text).bold = (level == 1)
+        if any("஀" <= ch <= "௿" for ch in text):  # Tamil title
+            tamil_runs(tp, 12)
+        field(cells[2].paragraphs[0], "PAGEREF %s \\h" % bm)
+        if level == 1:  # a chapter row never sits alone at the bottom of a page
+            for c in cells:
+                c.paragraphs[0].paragraph_format.keep_with_next = True
+    for row in t.rows:
+        row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+        for cell, w in zip(row.cells, widths):
+            cell.width = Inches(w)
+            for p in cell.paragraphs:
+                p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+                p.paragraph_format.space_before = Pt(2)
+                p.paragraph_format.space_after = Pt(2)
+                p.paragraph_format.first_line_indent = Inches(0)
+    TOC_HEAD._p.addnext(t._tbl)  # place the table right under the TOC heading
+
+
+build_toc_table()
 
 doc.save(OUT)
 print("saved", OUT, "| figures:", len(FIGS), "tables:", len(TABS))

@@ -246,6 +246,7 @@ def dfd_level(name, procs, stores, flows, w=12, h=5.2):
         ax.plot([x - 1.1, x + 1.1], [y + 0.28, y + 0.28], color=EDGE, lw=1.3)
         ax.plot([x - 1.1, x + 1.1], [y - 0.28, y - 0.28], color=EDGE, lw=1.3)
         ax.plot([x - 1.1, x - 1.1], [y - 0.28, y + 0.28], color=EDGE, lw=1.3)
+        ax.plot([x + 1.1, x + 1.1], [y - 0.28, y + 0.28], color=EDGE, lw=1.3)  # closed box
         ax.text(x, y, t, ha="center", va="center", fontsize=10)
     for (x1, y1, x2, y2, t) in flows:
         arrow(ax, x1, y1, x2, y2, t, off=(0, 0.18))

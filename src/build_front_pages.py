@@ -92,34 +92,49 @@ for i in (21, 25, 42, 43):
 
 # ---- page 3: acknowledgement (single student -> I / me) ---------------------
 P[47].paragraph_format.page_break_before = True
-IND = "              "
+# One clean paragraph per thanks: justified, 0.5" first-line indent, 1.5 line
+# spacing and equal space between paragraphs (no manual spaces or line breaks).
 ACK = {
-    50: [(IND + "I am much grateful to the management of Mother Terasa College of "
-          "Engineering and Technology, Pudukkottai for providing me an opportunity to "
-          "undergo this project work.", False)],
-    51: [("\n" + IND + "I have immense pleasure and satisfaction in expressing my hearty "
-          "thanks to our beloved managing founder ", False), ("Mr. R. CHINNATHAMBI,", True),
+    50: [("I am much grateful to the management of Mother Terasa College of Engineering and "
+          "Technology, Pudukkottai for providing me an opportunity to undergo this project "
+          "work.", False)],
+    51: [("I have immense pleasure and satisfaction in expressing my hearty thanks to our "
+          "beloved managing founder ", False), ("Dr. R. CHINNATHAMBI,", True),
          (" who is the source of this great institution.", False)],
-    52: [("\n" + IND + "I am very glad to express my hearty thanks to our beloved Chairman",
-          False)],
-    54: [("\n" + IND + "I would like to express my sincere thanks to our Principal", False)],
-    55: [("Dr. M. RAVICHANDRAN,", True),
-         (" Principal, MTCET, for the facilities and encouragement given towards the progress "
-          "and completion of this project.", False)],
-    56: [("\n" + IND + "I am grateful to ", False), (HOD, True),
+    52: [("I am very glad to express my hearty thanks to our beloved Chairman ", False),
+         ("Mr. R.C. UTHAYAKUMAR B.A.,", True),
+         (" who is the source of spirit and strength of this great institution.", False)],
+    54: [("I would like to express my sincere thanks to our respected Principal ", False),
+         ("Dr. M. RAVICHANDRAN Ph.D.,", True),
+         (" Principal, MTCET, for the facilities and encouragement given towards the "
+          "progress and completion of this project.", False)],
+    56: [("I am grateful to ", False), (HOD, True),
          (" Head of the Department, Department of Computer Science and Engineering, for the "
           "effective leadership and supportive guidance given to this project.", False)],
-    57: [("\n" + IND + "I wish to convey my heartfelt thanks to ", False), (GUIDE, True),
+    57: [("I wish to convey my heartfelt thanks to ", False), (GUIDE, True),
          (" Assistant Professor, Department of Computer Science and Engineering, my project "
           "guide, for not only showing the path but also encouraging me.", False)],
-    58: [("\n" + IND + "I wish to extend my sincere thanks to all faculty members of the "
-          "Computer Science and Engineering Department for their valuable suggestions and "
-          "encouragement towards the successful completion of this project.", False)],
-    59: [(IND + "Finally, I express my profound gratitude to the Almighty, who gave me the "
+    58: [("I wish to extend my sincere thanks to all faculty members of the Computer Science "
+          "and Engineering Department for their valuable suggestions and encouragement "
+          "towards the successful completion of this project.", False)],
+    59: [("Finally, I express my profound gratitude to the Almighty, who gave me the "
           "bravery, privilege, power and belief to complete this project.", False)],
 }
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING  # noqa: E402
+NBSP = " "  # non-breaking space: a title never ends a line apart from its name
 for i, parts in ACK.items():
+    parts = [(t.replace(" ", NBSP), b) if b else (t, b) for t, b in parts]  # bold = names
     set_runs(P[i], parts)
+    pf = P[i].paragraph_format
+    P[i].alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    pf.first_line_indent = Inches(0.5)
+    pf.left_indent = pf.right_indent = Inches(0)
+    pf.line_spacing = 1.35  # keeps all eight paragraphs on one page
+    pf.space_before = Pt(0)
+    pf.space_after = Pt(10)
+for i in (49, 53, 55):  # blank line and the old split-off name lines
+    P[i]._p.getparent().remove(P[i]._p)
+P[48].paragraph_format.space_after = Pt(6)
 
 # ---- make spacing explicit so it survives insertion into the report ---------
 # The template's defaults (Calibri 11 pt, 8 pt after, 1.08 line spacing) would
